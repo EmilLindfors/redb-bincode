@@ -2,9 +2,10 @@ use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
+use std::ops::RangeBounds;
 
-use redb::ReadableTable;
 pub use redb::StorageError;
+use redb::{Range, ReadableTable};
 
 pub const BINCODE_CONFIG: bincode::config::Configuration<bincode::config::BigEndian> =
     bincode::config::standard()
@@ -59,8 +60,8 @@ pub struct AccessGuard<'a, V> {
     _v: PhantomData<V>,
 }
 
-impl<'a, V> From<redb::AccessGuard<'a, &'static [u8]>> for AccessGuard<'a, V> {
-    fn from(inner: redb::AccessGuard<'a, &'static [u8]>) -> Self {
+impl<'a, V> From<redb::AccessGuard<'a, &'_ [u8]>> for AccessGuard<'a, V> {
+    fn from(inner: redb::AccessGuard<'a, &'_ [u8]>) -> Self {
         Self {
             inner,
             _v: PhantomData,
@@ -109,6 +110,47 @@ where
             })?
             .map(AccessGuard::from))
         }
+    }
+
+    pub fn get_many(&self, start: Option<usize>, end: Option<usize>) -> Result<Vec<(K, V)>, redb::Error> {
+        let mut res = vec![];
+        let mut i = 0;
+
+        let mut iter = self.inner.iter()?;
+        while let Some(r) = iter.next() {
+
+            if let Some(start) = start {
+                if i < start {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if let Some(end) = end {
+                if i >= end {
+                    break;
+                }
+            }
+ 
+
+            let (key, value) = r?;
+
+
+            let key = bincode::decode_from_slice(key.value(), BINCODE_CONFIG)
+                .map(|v| v.0)
+                .map_err(|e| {
+                    redb::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                })?;
+            let value = bincode::decode_from_slice(value.value(), BINCODE_CONFIG)
+                .map(|v| v.0)
+                .map_err(|e| {
+                    redb::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                })?;
+            res.push((key, value));
+
+            i += 1;
+        }
+        Ok(res)
     }
 }
 
