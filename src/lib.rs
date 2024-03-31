@@ -2,10 +2,9 @@ use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::RangeBounds;
 
 pub use redb::StorageError;
-use redb::{Range, ReadableTable};
+use redb::{ReadableTable, ReadableTableMetadata};
 
 pub const BINCODE_CONFIG: bincode::config::Configuration<bincode::config::BigEndian> =
     bincode::config::standard()
@@ -78,6 +77,8 @@ where
     }
 }
 
+
+/// A read-only table.
 pub struct ReadOnlyTable<K, V, S>
 where
     S: SortOrder + fmt::Debug + 'static,
@@ -93,10 +94,12 @@ where
     K: bincode::Encode + bincode::Decode,
     V: bincode::Encode + bincode::Decode,
 {
+    /// Returns the underlying redb table.
     pub fn as_raw(&self) -> &redb::ReadOnlyTable<sort::SortKey<S>, &'static [u8]> {
         &self.inner
     }
 
+    /// Get a value from the table by key.
     pub fn get<Q>(&self, key: &Q) -> Result<Option<AccessGuard<'static, V>>, StorageError>
     where
         K: Borrow<Q>,
@@ -112,6 +115,8 @@ where
         }
     }
 
+    /// Get a range of values from the table.
+    /// The range is inclusive on the start and exclusive on the end.
     pub fn get_many(&self, start: Option<usize>, end: Option<usize>) -> Result<Vec<(K, V)>, redb::Error> {
         let mut res = vec![];
         let mut i = 0;
@@ -151,6 +156,12 @@ where
             i += 1;
         }
         Ok(res)
+    }
+
+
+    /// Get metadata about the table.
+    pub fn stats(&self) -> Result<redb::TableStats, redb::StorageError> {
+        self.inner.stats()
     }
 }
 
