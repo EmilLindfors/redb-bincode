@@ -2,7 +2,6 @@ use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
-
 pub use redb::StorageError;
 use redb::{ReadableTable, ReadableTableMetadata};
 
@@ -54,6 +53,9 @@ pub use database::*;
 mod tx;
 pub use tx::*;
 
+mod traits;
+pub use traits::*;
+
 pub struct AccessGuard<'a, V> {
     inner: redb::AccessGuard<'a, &'static [u8]>,
     _v: PhantomData<V>,
@@ -76,7 +78,6 @@ where
         bincode::decode_from_slice(self.inner.value(), BINCODE_CONFIG).map(|v| v.0)
     }
 }
-
 
 /// A read-only table.
 pub struct ReadOnlyTable<K, V, S>
@@ -117,13 +118,16 @@ where
 
     /// Get a range of values from the table.
     /// The range is inclusive on the start and exclusive on the end.
-    pub fn get_many(&self, start: Option<usize>, end: Option<usize>) -> Result<Vec<(K, V)>, redb::Error> {
+    pub fn get_many(
+        &self,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) -> Result<Vec<(K, V)>, redb::Error> {
         let mut res = vec![];
         let mut i = 0;
 
         let mut iter = self.inner.iter()?;
         while let Some(r) = iter.next() {
-
             if let Some(start) = start {
                 if i < start {
                     i += 1;
@@ -136,10 +140,8 @@ where
                     break;
                 }
             }
- 
 
             let (key, value) = r?;
-
 
             let key = bincode::decode_from_slice(key.value(), BINCODE_CONFIG)
                 .map(|v| v.0)
@@ -158,6 +160,54 @@ where
         Ok(res)
     }
 
+    pub fn get_many_where<'a, F>(
+        &self,
+        start: Option<usize>,
+        end: Option<usize>,
+        mut f: F,
+    ) -> Result<Vec<(K, V)>, redb::Error>
+    where
+        F: FnMut((&K, &V)) -> bool,
+    {
+        let mut res = vec![];
+        let mut i = 0;
+
+        let mut iter = self.inner.iter()?;
+        while let Some(r) = iter.next() {
+            if let Some(start) = start {
+                if i < start {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if let Some(end) = end {
+                if i >= end {
+                    break;
+                }
+            }
+
+            let (key, value) = r?;
+
+            let key = bincode::decode_from_slice(key.value(), BINCODE_CONFIG)
+                .map(|v| v.0)
+                .map_err(|e| {
+                    redb::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                })?;
+            let value = bincode::decode_from_slice(value.value(), BINCODE_CONFIG)
+                .map(|v| v.0)
+                .map_err(|e| {
+                    redb::Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                })?;
+
+            if f((&key, &value)) {
+                res.push((key, value));
+            }
+
+            i += 1;
+        }
+        Ok(res)
+    }
 
     /// Get metadata about the table.
     pub fn stats(&self) -> Result<redb::TableStats, redb::StorageError> {
@@ -165,6 +215,7 @@ where
     }
 }
 
+/// A mutable table in the database.
 pub struct Table<'txn, K, V, S>
 where
     S: SortOrder + fmt::Debug + 'static,
@@ -187,6 +238,7 @@ where
         &mut self.inner
     }
 
+    /// Get a value from the table by key.
     pub fn get<Q>(&self, key: &Q) -> Result<Option<AccessGuard<'_, V>>, StorageError>
     where
         K: Borrow<Q>,
@@ -202,6 +254,8 @@ where
         }
     }
 
+    /// Inserts a key and value into the table.
+    /// Returns the previous value, if any.
     pub fn insert<KQ, VQ>(
         &mut self,
         key: &KQ,
@@ -231,7 +285,9 @@ where
         .map(AccessGuard::from))
     }
 
-    pub fn remove<KQ>(&mut self, key: &KQ) -> Result<Option<AccessGuard<'_, V>>, StorageError>
+    /// Remove a value from the table by key.
+    /// Returns the value that was removed, if any.
+    pub fn remove<KQ>(&mut self, key: &KQ) -> Result<Option<AccessGuard<'_, V>>, redb::Error>
     where
         K: Borrow<KQ>,
         KQ: bincode::Encode + ?Sized,
@@ -244,5 +300,48 @@ where
             })
         }?
         .map(AccessGuard::from))
+    }
+
+    /// Remove a range of values from the table with a given predicate.
+    /// Returns a vector of the removed entries.
+    pub fn remove_where<'a, F: FnMut((K, V)) -> bool>(
+        &mut self,
+        mut predicate: F,
+    ) -> Result<Vec<Option<(K, V)>>, StorageError>
+    where
+        //&'a K: bincode::Decode,
+        //&'a V: bincode::Decode + 'a,
+        V: bincode::Decode + bincode::Encode,
+        K: bincode::Decode + bincode::Encode,
+    {
+        let res = self
+            .inner
+            .extract_if(|key, value| {
+                let (key, _): (K, usize) = bincode::decode_from_slice(key, BINCODE_CONFIG).unwrap();
+                let (value, _): (V, usize) =
+                    bincode::decode_from_slice(value, BINCODE_CONFIG).unwrap();
+                predicate((key, value))
+            })?
+            .into_iter()
+            .map(|d| {
+                let (k, v) = d.unwrap();
+                let key: Result<(K, usize), bincode::error::DecodeError> =
+                    bincode::decode_from_slice(k.value(), BINCODE_CONFIG);
+                let value: Result<(V, usize), bincode::error::DecodeError> =
+                    bincode::decode_from_slice(v.value(), BINCODE_CONFIG);
+
+                if let Ok((k, _)) = key {
+                    if let Ok((v, _)) = value {
+                        Some((k, v))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(res)
     }
 }
