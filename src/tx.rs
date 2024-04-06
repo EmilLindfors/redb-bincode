@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use redb::TableError;
+use redb::{TableDefinition, TableError, TableHandle, UntypedTableHandle};
 
 use super::{ReadOnlyTable, Table};
 use crate::sort;
@@ -31,6 +31,13 @@ impl ReadTransaction {
             _v: PhantomData,
         })
     }
+
+    pub fn list_tables(&self) -> Result<Vec<UntypedTableHandle>, redb::Error> {
+        let res = self.0.list_tables()?.collect();
+
+    
+        Ok(res)
+    }
 }
 
 pub struct WriteTransaction(redb::WriteTransaction);
@@ -42,8 +49,8 @@ impl From<redb::WriteTransaction> for WriteTransaction {
 }
 
 impl WriteTransaction {
-    pub fn as_raw(&self) -> &redb::WriteTransaction {
-        &self.0
+    pub fn as_raw(self) -> redb::WriteTransaction {
+        self.0
     }
     pub fn open_table<K, V>(
         &self,
@@ -58,6 +65,15 @@ impl WriteTransaction {
             _k: PhantomData,
             _v: PhantomData,
         })
+    }
+
+
+    pub fn delete_table<K, V>(&self, def: TableDefinition<K, V>) -> Result<bool, TableError> 
+    where 
+        K: redb::Key + 'static,
+        V: redb::Value + 'static,
+    {
+        self.0.delete_table(def)
     }
 
     pub fn commit(self) -> Result<(), redb::CommitError> {

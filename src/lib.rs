@@ -3,7 +3,7 @@ use std::cell::UnsafeCell;
 use std::fmt;
 use std::marker::PhantomData;
 pub use redb::StorageError;
-use redb::{ReadableTable, ReadableTableMetadata};
+use redb::{ReadableTable, ReadableTableMetadata, TableHandle};
 
 pub const BINCODE_CONFIG: bincode::config::Configuration<bincode::config::BigEndian> =
     bincode::config::standard()
@@ -224,6 +224,9 @@ where
     _k: PhantomData<K>,
     _v: PhantomData<V>,
 }
+
+
+
 
 impl<'txn, K, V, S> Table<'txn, K, V, S>
 where

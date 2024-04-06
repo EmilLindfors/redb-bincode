@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use redb::TransactionError;
+use bincode::{Decode, Encode};
+use redb::{ReadableTableMetadata, TableHandle, TableStats, TransactionError, UntypedTableHandle};
 
 use super::tx::{ReadTransaction, WriteTransaction};
 use crate::tx;
@@ -8,7 +9,6 @@ use crate::tx;
 pub struct Database(redb::Database);
 
 impl Database {
-
     /// Creates a new database with the given name and cache size.
     /// If the cache size is not provided, the default cache size is 4GB.
     pub fn new(name: impl AsRef<Path>, cache_size: Option<usize>) -> Self {
@@ -17,6 +17,30 @@ impl Database {
             .create(name)
             .unwrap();
         Database(db)
+    }
+
+    fn table_iterator(&self) -> Result<impl Iterator<Item = UntypedTableHandle>, redb::Error> {
+        Ok(self.begin_read()?.as_raw().list_tables()?)
+    }
+
+    pub fn table_stats(&self) -> Result<Vec<(String, TableStats)>, redb::Error> {
+        let mut res = Vec::new();
+        for table in self.begin_read()?.list_tables()? {
+            let name = table.name().to_string();
+            let stats = self.begin_read()?.as_raw().open_untyped_table(table)?;
+            res.push((name, stats.stats()?));
+        }
+
+        Ok(res)
+    }
+
+    pub fn delete_table(&self, name: &str) -> Result<bool, redb::Error> {
+        for table in self.table_iterator()? {
+            if table.name() == name {
+                return Ok(self.begin_write()?.as_raw().delete_table(table)?);
+            }
+        }
+        Ok(false)
     }
 
     /// Start a read transaction.

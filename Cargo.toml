@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 redb = "2.0.0"
-bincode = "2.0.0-rc.3"
+bincode = {workspace = true}
 common = { path = "../common" }
 
 [profile.dev]
@@ -16,9 +16,13 @@ debug = "line-tables-only"
 lto = "off"
 
 [profile.release]
-debug = "line-tables-only"
+#debug = "line-tables-only"
+debug = true
 lto = "fat"
 codegen-units = 1
+
+
+
 
 # Workaround: https://github.com/rust-lang/cargo/issues/12457 which causes
 #             https://github.com/ipetkov/crane/issues/370
